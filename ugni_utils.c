@@ -300,10 +300,8 @@ int ugni_finalize(void)
 	if (status != GNI_RC_SUCCESS) {
 	}
 
-#if 0
 	free(sysconf_peer_gni_info);
 	sysconf_peer_gni_info = NULL;
-#endif
 
 	return 0;
 }

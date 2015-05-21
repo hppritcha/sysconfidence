@@ -330,12 +330,12 @@ void net_uGNI_test(test_p tst, measurement_p m) {
 
 	mdh_addr_t my_info, partner_info;
 
-#if 0
-	fprintf(stderr,"ENTERING uGNI TEST\n");
-#endif
 	sbuf = comm_newbuffer(m->buflen);	/* exchange buffers */
 	rbuf = comm_newbuffer(m->buflen);
 
+#if 1
+	fprintf(stderr,"ENTERING uGNI TEST %d\n", m->buflen);
+#endif
 	/*
 	 * create and endpoint and
 	 * bind to peer
@@ -348,7 +348,7 @@ void net_uGNI_test(test_p tst, measurement_p m) {
 
 
 	status = GNI_MemRegister(gni_nic.nic,
-				 (uint64_t)sbuf,
+				 (uint64_t)sbuf->data,
 				 m->buflen,
 				 NULL,
 				 GNI_MEM_READWRITE,
@@ -357,7 +357,7 @@ void net_uGNI_test(test_p tst, measurement_p m) {
 	assert(status == GNI_RC_SUCCESS);
 
 	status = GNI_MemRegister(gni_nic.nic,
-				 (uint64_t)rbuf,
+				 (uint64_t)rbuf->data,
 				 m->buflen,
 				 gni_nic.rx_cq,
 				 GNI_MEM_READWRITE,
@@ -373,7 +373,7 @@ void net_uGNI_test(test_p tst, measurement_p m) {
 	rma_desc.cq_mode = GNI_CQMODE_GLOBAL_EVENT |
 				GNI_CQMODE_REMOTE_EVENT;
 	rma_desc.dlvr_mode = sysconf_ugni_dlvr_mode;
-	rma_desc.local_addr = (uint64_t) sbuf;
+	rma_desc.local_addr = (uint64_t) sbuf->data;
 	rma_desc.local_mem_hndl = sbuf_hndl;
 	rma_desc.length = m->buflen;
 	rma_desc.src_cq_hndl = gni_nic.tx_cq;
@@ -404,10 +404,10 @@ void net_uGNI_test(test_p tst, measurement_p m) {
 			partner_rank = my_rank ^ istage;
 
 			my_info.mdh = rbuf_hndl;
-			my_info.addr = (uint64_t)rbuf;
+			my_info.addr = (uint64_t)rbuf->data;
 #if 0
 			fprintf(stderr,"rank %d settting info vaddr 0x%016lx 0x%016lx 0x%016lx\n",
-				my_rank, (uint64_t)rbuf, my_info.mdh.qword1, my_info.mdh.qword2);
+				my_rank, (uint64_t)rbuf->data, my_info.mdh.qword1, my_info.mdh.qword2);
 #endif
 
 			ierr = MPI_Sendrecv(&my_info,
