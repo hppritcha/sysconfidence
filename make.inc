@@ -37,16 +37,19 @@ XDD_LIBS =
 MPI_LIBDIR = 
 MPI_LIBS   =
 
+# UGNI DIRECT FLAGs
+USE_UGNI_DIRECT = -DUGNI_DIRECT
+
 # compiler and flags
 
-CC       = mpicc
+CC       = cc
 # CFLAGS -- use the last one
 CFLAGS   = -m64 -march=core2 -mtune=core2 -O3
-CFLAGS   = -m64 -O3  $(USE_XDD) $(USE_SHMEM)
+CFLAGS   = -m64 -O3  $(USE_XDD) $(USE_SHMEM) $(USE_UGNI_DIRECT)
 
 # no need for mpi in read_xdd
 GCC	 = gcc
 
 # libraries
-LIBS = $(MPI_LIBDIR) $(MPI_LIBS) $(SHMEM_LIBS) $(XDD_LIBS) -lpthread -lrt
+LIBS = $(MPI_LIBDIR) $(MPI_LIBS) $(SHMEM_LIBS) -lpthread -lrt
 

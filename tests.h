@@ -36,13 +36,18 @@ enum {UNDEF=0, NET_TEST=1, BIT_TEST=2, IO_TEST=3};
 	#define io_test io_SHMEM_test
 #else
 	#define bit_test bit_MPI_test
+#ifdef UGNI_DIRECT
+	#define net_test net_uGNI_test
+#else
 	#define net_test net_MPI_test
+#endif
 	#define io_test io_MPI_test
 #endif
 
 /* network latency test */
 void 		net_SHMEM_test(test_p tst, measurement_p m);
 void 		net_MPI_test(test_p tst, measurement_p m);
+void 		net_uGNI_test(test_p tst, measurement_p m);
 void 		net_measurement_bin(test_p tst, measurement_p m, double *t, double *cos, double *cpw, int LOCAL);
 measurement_p 	net_measurement_create(test_p tst, char *label);
 

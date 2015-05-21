@@ -1,10 +1,13 @@
 
-#include "aft_internal.h"
+#include "ugni_utils.h"
+#include "mpi.h"
+#include <errno.h>
 
-aft_nic_t aft_nic;
-aft_conn_info_t my_conn_info;
-gni_ep_handle_t *aft_ep_hndls;
+sysconf_gni_nic_t gni_nic;
+sysconf_gni_peer_info_t *sysconf_peer_gni_info;
+sysconf_gni_peer_info_t sysconf_my_gni_info;
 
+static int ugni_initialized;
 /*
  * by default we use in order routing on aries since
  * first order of business for sysconfidence test
@@ -12,23 +15,40 @@ gni_ep_handle_t *aft_ep_hndls;
  * using in order.
  */
 
-uint16_t sysconf_gni_dlvr_mode = GNI_DLVMODE_IN_ORDER;
+uint16_t sysconf_ugni_dlvr_mode = GNI_DLVMODE_IN_ORDER;
 
 /*
  * we ask for fma sharing - hopefully won't stress
  * out craypich
  */
-uint32_t sysconf_gni_cdm_modes = GNI_CDM_MODE_FMA_SHARED;
+static uint32_t ugni_cdm_modes = GNI_CDM_MODE_FMA_SHARED;
 
+/*
+ * forward prototypes
+ */
 
-int ugni_init(int cdm_modes)
+/**
+ * @brief get local cname of node from /proc/cray_xt
+ * @param[out] cname  pointer to buffer where cname will be returned
+ * @param[in] len     length of buffer where cname will be returned
+ *
+ * @return 0 on success, -1 on failure
+ */
+static int _get_cname(char *cname, int len);
+
+static int _get_ptag(uint8_t *ptag);
+static int _get_cookie(uint32_t *cookie);
+
+int ugni_init(void)
 {
+	gni_return_t status;
 	char *env_str;
+	uint8_t ptag;
+	uint32_t cookie;
 	int i, rc, my_rank, nranks;
 	int device_id = 0; /* only 1 aries nic/node */
-	uint32_t bytes_per_smsg;
-	gni_smsg_attr_t smsg_attr;
-	gni_smsg_attr_t *all_smsg_attrs = NULL;
+	sysconf_gni_peer_info_t my_gni_info;
+	sysconf_gni_peer_info_t *tmp_info;
 
 	/*
 	 * we need pmi to be fired up in order to initialize
@@ -49,291 +69,304 @@ int ugni_init(int cdm_modes)
 	env_str = getenv("SYSCONF_DLVR_MODE");
 	if (env_str != NULL) {
 		if (strcmp(env_str,"GNI_DLVMODE_NMIN_HASH")) {
-			sysconf_gni_dlvr = GNI_DLVMODE_NMIN_HASH;
-		}
-		else if (strcmp(value,"GNI_DLVMODE_MIN_HASH")) {
-			sysconf_gni_dlvr = GNI_DLVMODE_MIN_HASH;
-		}
-		else if (strcmp(value,"GNI_DLVMODE_ADAPTIVE0")) {
-			sysconf_gni_dlvr = GNI_DLVMODE_ADAPTIVE0;
-		}
-		else if (strcmp(value,"GNI_DLVMODE_ADAPTIVE1")) {
-			sysconf_gni_dlvr = GNI_DLVMODE_ADAPTIVE1;
-		}
-		else if (strcmp(value,"GNI_DLVMODE_ADAPTIVE2")) {
-			sysconf_gni_dlvr = GNI_DLVMODE_ADAPTIVE2;
-		}
-		else if (strcmp(value,"GNI_DLVMODE_ADAPTIVE3")) {
-			sysconf_gni_dlvr = GNI_DLVMODE_ADAPTIVE3;
+			sysconf_ugni_dlvr_mode = GNI_DLVMODE_NMIN_HASH;
+		} else if (strcmp(env_str,"GNI_DLVMODE_MIN_HASH")) {
+			sysconf_ugni_dlvr_mode = GNI_DLVMODE_MIN_HASH;
+		} else if (strcmp(env_str,"GNI_DLVMODE_ADAPTIVE0")) {
+			sysconf_ugni_dlvr_mode = GNI_DLVMODE_ADAPTIVE0;
+		} else if (strcmp(env_str,"GNI_DLVMODE_ADAPTIVE1")) {
+			sysconf_ugni_dlvr_mode = GNI_DLVMODE_ADAPTIVE1;
+		}else if (strcmp(env_str,"GNI_DLVMODE_ADAPTIVE2")) {
+			sysconf_ugni_dlvr_mode = GNI_DLVMODE_ADAPTIVE2;
+		} else if (strcmp(env_str,"GNI_DLVMODE_ADAPTIVE3")) {
+			sysconf_ugni_dlvr_mode = GNI_DLVMODE_ADAPTIVE3;
 		}
         }
 
 	if (getenv("SYSCONF_USE_PCI_IOMMU") != NULL) {
-		sysconf_ugni_cdm_modes |= GNI_CDM_MODE_USE_PCI_IOMMU;
+		ugni_cdm_modes |= GNI_CDM_MODE_USE_PCI_IOMMU;
 	}
 
 	if (getenv("SYSCONF_FLBTE_DISABLE") != NULL) {
-		sysconf_ugni_cdm_modes |= GNI_CDM_MODE_FLBTE_DISABLE;
+		ugni_cdm_modes |= GNI_CDM_MODE_FLBTE_DISABLE;
 	}
 
 	if (getenv("SYSCONF_BTE_SINGLE_CHANNEL") != NULL) {
-		sysconf_ugni_cdm_modes |= GNI_CDM_MODE_BTE_SINGLE_CHANNEL;
+		ugni_cdm_modes |= GNI_CDM_MODE_BTE_SINGLE_CHANNEL;
 	}
 
-	if (getenv("SYSCONF_UGNI_DISPLAY") != NULL) && (my_rank == 0)) {
+	if ((getenv("SYSCONF_UGNI_DISPLAY") != NULL) && (my_rank == 0)) {
 		fprintf(stderr,"SYSCONF: UGNI DLVR MODE - ");
-		switch (sysconf_gni_dlvr_mode) {
-		GNI_DLVMODE_IN_ORDER:
+		if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_IN_ORDER) {
 			fprintf(stderr,"GNI_DLVMODE_IN_ORDER\n");
-			break;
-		GNI_DLVMODE_NMIN_HASH:
+		} else if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_NMIN_HASH) {
 			fprintf(stderr,"GNI_DLVMODE_NMIN_HASH\n");
-			break;
-		GNI_DLVMODE_MIN_HASH:
+		} else if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_MIN_HASH) {
 			fprintf(stderr,"GNI_DLVMODE_MIN_HASH\n");
-			break;
-		GNI_DLVMODE_ADAPTIVE0:
+		} else if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_ADAPTIVE0) {
 			fprintf(stderr,"GNI_DLVMODE_ADAPTIVE0\n");
-			break;
-		GNI_DLVMODE_ADAPTIVE1:
+		} else if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_ADAPTIVE1) {
 			fprintf(stderr,"GNI_DLVMODE_ADAPTIVE1\n");
-			break;
-		GNI_DLVMODE_ADAPTIVE2:
+		} else if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_ADAPTIVE2) {
 			fprintf(stderr,"GNI_DLVMODE_ADAPTIVE2\n");
-			break;
-		GNI_DLVMODE_ADAPTIVE3:
+		} else if (sysconf_ugni_dlvr_mode == GNI_DLVMODE_ADAPTIVE3) {
 			fprintf(stderr,"GNI_DLVMODE_ADAPTIVE3\n");
-			break;
 		}
-		if (sysconf_ugni_cdm_modes & GNI_CDM_MODE_USE_PCI_IOMMU) {
+		if (ugni_cdm_modes & GNI_CDM_MODE_USE_PCI_IOMMU) {
 			fprintf(stderr,"SYSCONF: USING PCI IOMMU\n");
 		}
-		if (sysconf_ugni_cdm_modes & GNI_CDM_MODE_FLBTE_DISABLE) {
+		if (ugni_cdm_modes & GNI_CDM_MODE_FLBTE_DISABLE) {
 			fprintf(stderr,"SYSCONF: FLBTE disabled\n");
 		}
-		if (sysconf_ugni_cdm_modes & GNI_CDM_MODE_BTE_SINGLE_CHANNEL) {
+		if (ugni_cdm_modes & GNI_CDM_MODE_BTE_SINGLE_CHANNEL) {
 			fprintf(stderr,"SYSCONF: Using BTE in single channel mode\n");
 		}
 	}
 
-	/*
-	 * gather up cnames
-	 */
+	sysconf_my_gni_info.rank = my_rank;
 
-	rc = PMI_Allgather(&my_conn_info,
-			   all_smsg_attrs,
-                           sizeof(my_conn_info));
-	if (rc != PMI_SUCCESS) {
-		fprintf(stderr,"SYSCONF: PMI_Allgather returned %d aborting...\n",rc);
+	rc = _get_cname(sysconf_my_gni_info.cname,
+			sizeof(sysconf_my_gni_info.cname));
+	if (rc != 0) {
+		fprintf(stderr,"SYSCONF(%d): _get_cname failed\n",my_rank);
 		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
-	rc = PMI_Get_size(&nranks);
-	if (rc != PMI_SUCCESS) {
-		AFT_WARN("PMI_Get_size returned %d\n",rc);
-		goto err;
+
+	/*
+ 	 * get rdma credentials needed to initialize ugni cdm
+ 	 * use the same credentials as craypich/openmpi in case
+ 	 * wanting to also use shmem in the sysconfidence test
+ 	 * at the same time
+ 	 */
+
+	rc = _get_ptag(&ptag);
+	if (rc != 0) {
+		fprintf(stderr,"SYSCONF(%s,%d): _get_ptag failed\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank);
+		MPI_Abort(MPI_COMM_WORLD,-1);
+	}
+
+	rc = _get_cookie(&cookie);
+	if (rc != 0) {
+		fprintf(stderr,"SYSCONF(%s,%d): _get_cookie failed\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank);
+		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
 
 	/*
-	 * Get the GNI RDMA credentials from PMI - we use the first
-	 * ptag/cookie since at some point one might want to use the
-	 * shmem and ugni together
-	 */
-
-	ptag = __get_ptag();
-	cookie = __get_cookie();
-
-	status = GNI_CdmCreate(my_rank,
-			       ptag,
-			       cookie,
-			       cdm_modes,
-			       &aft_nic.cdm);
+ 	 * create the cdm
+ 	 */
+	status = GNI_CdmCreate(sysconf_my_gni_info.rank,
+				ptag,
+				cookie,
+				ugni_cdm_modes,
+				&gni_nic.cdm);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CdmCreate returned %s\n",
+		fprintf(stderr,"SYSCONF(%s,%d): GNI_CdmCreate failed %s\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank,
 			gni_err_str[status]);
-		goto err;
+		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
 
-	status = GNI_CdmAttach(aft_nic.cdm,
+	/*
+ 	 * attach cdm to the local nic
+ 	 */
+	status = GNI_CdmAttach(gni_nic.cdm,
 			       device_id,
-			       &local_address,
-			       &aft_nic.nic);
+			       &sysconf_my_gni_info.gni_addr,
+			       &gni_nic.nic);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CdmAttach returned %s\n",
+		fprintf(stderr,"SYSCONF(%s,%d): GNI_CdmAttach failed %s\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank,
 			gni_err_str[status]);
-		goto err1;
+		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
 
 	/*
 	 * create a TX CQ
 	 */
 
-	status = GNI_CqCreate(aft_nic.nic,
-			      number_of_cq_entries,
+	status = GNI_CqCreate(gni_nic.nic,
+			      1024, /* plenty, we're doing simple comm. */
 			      0,
 			      GNI_CQ_NOBLOCK | GNI_CQ_PHYS_PAGES,
 			      NULL,
 			      NULL,
-			      &aft_nic.tx_cq);
+			      &gni_nic.tx_cq);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CqCreate returned %s\n",
+		fprintf(stderr,"SYSCONF(%s,%d): GNI_CqCreate failed %s\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank,
 			gni_err_str[status]);
-		goto err1;
+		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
 
 	/*
 	 * create a RX CQ
 	 */
-        status = GNI_CqCreate(aft_nic.nic,
-			      number_of_rx_cq_entries,
+        status = GNI_CqCreate(gni_nic.nic,
+			      10 * 1024, /* just in case we retransmit */
+			      0,
 			      GNI_CQ_NOBLOCK | GNI_CQ_PHYS_PAGES,
 			      NULL,
 			      NULL,
-			      &aft_nic.rx_cq);
+			      &gni_nic.rx_cq);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CqCreate returned %s\n",
+		fprintf(stderr,"SYSCONF(%s,%d): GNI_CqCreate failed %s\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank,
 			gni_err_str[status]);
-		goto err2;
-	}
-
-	rc = PMI_Allgather(&my_conn_info,
-			   all_smsg_attrs,
-                           sizeof(my_conn_info));
-	if (rc != PMI_SUCCESS) {
-		AFT_WARN("PMI_Allgather returned %d\n", rc);
-		goto err3;
+		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
 
 	/*
-	 * Set up the endpoints
-	 */
+ 	 * exchange info
+ 	 */
 
-	aft_ep_hndls  = malloc(nranks * sizeof(gni_ep_handle_t));
-	if (ep_hndls == NULL) {
-		AFT_WARN("calloc of ep_hndls failed\n");
-		goto err3;
-	}
-
-	i = 0;
-	while(i < nranks) {
-		the_rank = all_smsg_attrs[i].my_rank;
-        	status = GNI_EpCreate(aft_nic.nic,
-					aft_nic.tx_cq,
-					&aft_ep_hndls[the_rank]);
-		if (status != GNI_RC_SUCCESS) {
-			AFT_WARN("GNI_MemRegister returned %s\n",
-				gni_err_str[status]);
-			goto err3;
-		}
-		all_smsg_attrs[i].attr.mbox_offset = bytes_per_smsg * the_rank;
-
-		smsg_attr.msg_type = GNI_SMSG_TYPE_MBOX_AUTO_RETRANSMIT;
-		smsg_attr.mbox_maxcredit = 16;
-		smsg_attr.msg_maxsize = 512;
-		smsg_attr.mbox_offset = bytes_per_smsg * the_rank;
-
-		status = GNI_SmsgInit(aft_ep_hndls[the_rank],
-					&smsg_attr,
-					&all_smsg_attrs[i]);
-		if (status != GNI_RC_SUCCESS) {
-			AFT_WARN("GNI_MemRegister returned %s\n",
-				gni_err_str[status]);
-			goto err3;
-		}
-		++i;;
-	}
-
-	/*
-	 * need to barrier here to make sure all ranks have
-	 * initialized their endpoints for messaging
-	 */
-
-	rc = PMI_Barrier();
+	rc = PMI_Get_size(&nranks);
 	if (rc != PMI_SUCCESS) {
-		AFT_WARN("GNI_MemRegister returned %s\n",
-			gni_err_str[status]);
-		goto err;
+		fprintf(stderr,"SYSCONF(%s,%d): PMI_Get_size failed %d\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank);
+		MPI_Abort(MPI_COMM_WORLD,-1);
 	}
+
+	tmp_info = malloc(sizeof(sysconf_gni_peer_info_t) * nranks);
+	if (tmp_info == NULL) {
+		fprintf(stderr,"SYSCONF(%s,%d): malloc of %d bytes failed\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank,
+			sizeof(sysconf_gni_peer_info_t) * nranks);
+		MPI_Abort(MPI_COMM_WORLD,-1);
+	}
+
+	rc = PMI_Allgather(&sysconf_my_gni_info,
+			   tmp_info,
+                           sizeof(sysconf_gni_peer_info_t));
+	/*
+ 	 * now rearrange the info into the final array - PMI_Allgather
+ 	 * doesn't necessarily deliver the data in rank order
+ 	 */
+
+	sysconf_peer_gni_info = malloc(sizeof(sysconf_gni_peer_info_t) *
+				       nranks);
+	if (sysconf_peer_gni_info == NULL) {
+		fprintf(stderr,"SYSCONF(%s,%d): malloc of %d bytes failed\n",
+			sysconf_my_gni_info.cname,
+			sysconf_my_gni_info.rank,
+			sizeof(sysconf_gni_peer_info_t) * nranks);
+		MPI_Abort(MPI_COMM_WORLD,-1);
+	}
+
+	for (i=0; i<nranks; i++) {
+		assert(tmp_info[i].rank < nranks);
+		sysconf_peer_gni_info[tmp_info[i].rank].gni_addr =
+			tmp_info[i].gni_addr;
+		strcpy(sysconf_peer_gni_info[tmp_info[i].rank].cname,
+		       tmp_info[i].cname);
+	}
+
+	free(tmp_info);
+	ugni_initialized = 1;
 
 	return 0;
-
-err3:
-	GNI_CqDestroy(aft_nic.rx_cq);
-err2:
-	GNI_CqDestroy(aft_nic.tx_cq);
-err1:
-	GNI_CdmDestroy(aft_nic.cdm);
-err:
-	if (all_smsg_attrs != NULL)
-		free(all_smsg_attrs);
-	if (aft_ep_hndls != NULL)
-		free(aft_ep_hndls);
-
-	PMI_Finalize();
-	return -1;
 }
 
-int aft_finalize(int cdm_modes)
+int ugni_finalize(void)
 {
-	int i, rc, my_rank, nranks;
+	gni_return_t status;
 
 	/*
 	 * wasn't initialized, nothing to do
 	 */
 
-	if (!aft_initialized)
+	fprintf(stderr,"CALLING UGNI_FINALIZE\n");
+	if (!ugni_initialized)
 		return -1;
 
-	/*
-	 * PMI barrier to make sure everyone's done with
-	 * remote memory access
-	 */
-
-	rc = PMI_Barrier();
-	if (rc != PMI_SUCCESS) {
-		AFT_WARN("PMI_Init returned %d\n",rc);
-		goto err;
-	}
-
-	/*
-	 * destroy the endpoints
-	 */
-
-	for (i = 0; i < nranks; i++) {
-		status = GNI_EpDestroy(aft_ep_hndls[i]);
-		if (status != GNI_RC_SUCCESS) {
-			AFT_WARN("GNI_EpDestroy returned %s\n",
-				gni_err_str[status]);
-			goto err;
-		}
-	}
-
-	status = GNI_CqDestroy(aft_nic.tx_cq);
+	status = GNI_CqDestroy(gni_nic.tx_cq);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CqDestroy returned %s\n",
-			gni_err_str[status]);
-		goto err;
 	}
 
-	status = GNI_CqDestroy(aft_nic.rx_cq);
+	status = GNI_CqDestroy(gni_nic.rx_cq);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CqDestroy returned %s\n",
-			gni_err_str[status]);
-		goto err;
 	}
 
-	status = GNI_CdmDestroy(aft_nic.cdm);
+	status = GNI_CdmDestroy(gni_nic.cdm);
 	if (status != GNI_RC_SUCCESS) {
-		AFT_WARN("GNI_CqDestroy returned %s\n",
-			gni_err_str[status]);
-		goto err;
 	}
 
-	rc = PMI_Finalize();
-	if (rc != PMI_SUCCESS)
-		AFT_WARN("PMI_Finalize returned %d\n", rc);
+#if 0
+	free(sysconf_peer_gni_info);
+	sysconf_peer_gni_info = NULL;
+#endif
 
 	return 0;
+}
 
-err:
-	return -1;
+static int _get_cname(char *cname, int len)
+{
+	int ret = 0;
+	FILE *fd=NULL;
+	char filename[1024];
+
+	fd = fopen("/proc/cray_xt/cname","r");
+	if (fd != NULL) {
+		fscanf(fd, "%s", filename);
+		if (strlen(filename) < len) {
+			strcpy(cname, filename);
+		} else {
+			ret = -1;
+		}
+		fclose(fd);
+	} else {
+		ret = -1;
+	}
+
+	return ret;
+}
+
+static int _get_ptag(uint8_t *out_ptag)
+{
+    /* TODO no need for tmp */
+    char *ptr;
+    uint8_t tmp_ptag;
+
+	if (NULL == (ptr = getenv("PMI_GNI_PTAG"))) {
+		return -1;
+	}
+
+	errno = 0;
+	tmp_ptag = (uint8_t)strtoul (ptr, (char **)NULL, 10);
+	if (0 != errno) {
+		return -1;
+	}
+
+	*out_ptag = tmp_ptag;
+	return 0;
+}
+
+static int _get_cookie (uint32_t *out_cookie)
+{
+    char *ptr;
+    uint32_t tmp_cookie;
+
+    if (NULL == (ptr = getenv("PMI_GNI_COOKIE"))) {
+        return -1;
+    }
+
+    errno = 0;
+    tmp_cookie = (uint32_t) strtoul (ptr, NULL, 10);
+    if (0 != errno) {
+        /* TODO add err msg - better rc? */
+        return -1;
+    }
+
+    *out_cookie = tmp_cookie;
+
+    return 0;
 }

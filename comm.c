@@ -43,6 +43,9 @@
 	static long rSync[_SHMEM_REDUCE_SYNC_SIZE];
 #else
 	#include <mpi.h>
+#ifdef UGNI_DIRECT
+#include "ugni_utils.h"
+#endif
 #endif
 
 /**
@@ -327,6 +330,10 @@ void comm_MPI_initialize(test_p tst, int *argc, char **argv[]) {
 			      node_id, sizeof(uint64_t), MPI_BYTE, MPI_COMM_WORLD);
 	assert(ierr == 0);
 #endif
+#ifdef UGNI_DIRECT
+	ierr = ugni_init();
+	assert(ierr == 0);
+#endif
 	return;
 }
 
@@ -338,6 +345,9 @@ void comm_MPI_finalize() {
 #ifndef SHMEM
 	free(node_id);
 	MPI_Finalize();
+#ifdef UGNI_DIRECT
+	ugni_finalize();
+#endif
 #endif
 	return;
 }

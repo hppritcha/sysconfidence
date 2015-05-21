@@ -4,17 +4,11 @@ else
 include make.inc
 endif
 
-HDRS     = config.h measurement.h orbtimer.h types.h tests.h copyright.h comm.h options.h
-OBJS     = measurement.o orbtimer.o comm.o net_test.o options.o sysconfidence.o bit_test.o $(XDD_OBJS)
+HDRS     = config.h measurement.h orbtimer.h types.h tests.h copyright.h comm.h options.h ugni_utils.h
+OBJS     = measurement.o orbtimer.o comm.o net_test.o options.o sysconfidence.o bit_test.o ugni_utils.o
 
-sysconfidence: $(XDD_LIBS) $(OBJS) $(XDD_TARGETS) 
+sysconfidence: $(OBJS)
 	$(CC) $(CFLAGS) -o sysconfidence $(OBJS) $(LIBS)
-
-read_xdd: read_xdd_dump.c $(shell find xdd -name xdd.h)
-	$(GCC) $(CFLAGS) -o read_xdd read_xdd_dump.c
-
-libxdd.a: $(shell find xdd -name xdd.c)
-	./scripts/build_xdd.sh
 
 sysconfidence.o: sysconfidence.c $(HDRS)
 measurement.o:   measurement.c   $(HDRS)
@@ -23,7 +17,7 @@ comm.o:          comm.c          $(HDRS)
 orbtimer.o:      orbtimer.c      $(HDRS)
 net_test.o:      net_test.c      $(HDRS)
 bit_test.o:      bit_test.c      $(HDRS)
-io_test.o:       io_test.c       $(HDRS)
+ugni_utils.o:    ugni_utils.c      $(HDRS)
 
 config.h:
 	echo No config.h
