@@ -1,0 +1,63 @@
+The ugni variant of the core of the net test works identically as
+the shmem and MPI variants for all of the command line options.
+
+To build the sysconfidence with "uGNI DIRECT" - which uses the
+uGNI API directly to do PUTs to a buffer in a peer rank do
+the following:
+
+git clone https://github.com/hppritcha/sysconfidence.git
+
+cd sysconfidence
+make clean
+make
+
+Don't delete the config.h in the directory.  If you do
+run
+
+scripts/config.sh crayxt
+
+You should be ready to go at this point.
+
+There are some environment variables to control how sysconfidence
+is using uGNI:
+
+
+SYSCONF_DLVR_MODE -
+
+this controls the routing algorithm used for packets generated
+by the put request to deliver data into a buffer at a remote node.
+Possible values are
+
+GNI_DLVMODE_NMIN_HASH
+GNI_DLVMODE_MIN_HASH
+GNI_DLVMODE_ADAPTIVE0
+GNI_DLVMODE_ADAPTIVE1
+GNI_DLVMODE_ADAPTIVE2
+GNI_DLVMODE_ADAPTIVE3
+
+The default routing mode is in order - not very good performance
+but better for isolating network faults.
+
+SYSCONF_USE_PCI_IOMMU -
+
+Setting this to 1 results in memory registrations being done
+using the Intel NorthBridge's I/O MMU.  Note this may not
+be allowed depending on kgni modle parameters used at boot.
+
+SYSCONF_FLBTE_DISABLE
+
+Disable use of the FLBTE hardware.  By default the sysconfidence
+uses this path for programming the BTE.
+
+SYSCONF_BTE_SINGLE_CHANNEL
+
+Setting this to any value results in sysconfidence using only
+a single BTE channel.  This may reduce noise in the data
+but with lower performance, particularly for small messages
+sizes.
+
+SYSCONF_UGNI_DISPLAY -
+
+Seting this will result in the ugni component of sysconficence
+reporting any non-default setting that were set via the
+above env. variables.
