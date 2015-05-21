@@ -11,6 +11,9 @@ cd sysconfidence
 make clean
 make
 
+This package has been built using PrgEnv-gnu.  Not tested
+with intel or cray PrgEnv modules.
+
 Don't delete the config.h in the directory.  If you do
 run
 
