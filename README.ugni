@@ -8,6 +8,8 @@ the following:
 git clone https://github.com/hppritcha/sysconfidence.git
 
 cd sysconfidence
+git checkout topic/ugni_comm
+
 make clean
 make
 
